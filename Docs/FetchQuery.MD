@@ -138,3 +138,5 @@ Complex Debugging: Isolating issues, tracing errors, and profiling slow database
 Vendor Lock-in Potential: The structure mixes engine configurations (PostgreSQL, SqlServer, MySQL), which complicates maintaining clean, cross-platform compatibility for dynamic, vendor-specific syntax wrappers.
 
 Fix this cons and more enhanced data security aviod sql injections more secureable service.
+
+https://chroma-blot-75920126.figma.site/
