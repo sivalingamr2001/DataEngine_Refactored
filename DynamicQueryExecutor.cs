@@ -1,510 +1,597 @@
-using System;
-using System.Collections.Generic;
 using System.Data;
-using System.Threading.Tasks;
 using Dapper;
-using Microsoft.Data.SqlClient;
-using Oracle.ManagedDataAccess.Client;
+using Microsoft.Extensions.Logging;
+
+namespace DynamicDapper;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Enums & DTOs
-// ─────────────────────────────────────────────────────────────────────────────
-
-public enum DbProvider
-{
-    SqlServer,
-    Oracle
-}
-
-public sealed class QueryRequest
-{
-    public string            ConnectionString { get; init; } = string.Empty;
-    public DbProvider        Provider         { get; init; } = DbProvider.SqlServer;
-    public string            Sql              { get; init; } = string.Empty;
-
-    /// <summary>
-    /// Optional parameters – pass an anonymous object or DynamicParameters.
-    /// e.g. new { p_ou_id = 10, p_year = 2024 }
-    /// </summary>
-    public object?           Parameters       { get; init; }
-
-    /// <summary>
-    /// Command type: Text (default), StoredProcedure, TableDirect.
-    /// </summary>
-    public CommandType       CommandType      { get; init; } = CommandType.Text;
-
-    /// <summary>Timeout in seconds; null = Dapper default (30 s).</summary>
-    public int?              TimeoutSeconds   { get; init; }
-}
-
-public sealed class QueryResult<T>
-{
-    public bool              Success          { get; init; }
-    public IEnumerable<T>?   Data             { get; init; }
-    public int?              RowsAffected     { get; init; }
-    public string?           ErrorMessage     { get; init; }
-    public string?           ErrorType        { get; init; }
-    public TimeSpan          Elapsed          { get; init; }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Connection factory
-// ─────────────────────────────────────────────────────────────────────────────
-
-public static class DbConnectionFactory
-{
-    /// <summary>
-    /// Creates and OPENS a connection for the specified provider.
-    /// Caller is responsible for disposal (use 'await using').
-    /// </summary>
-    public static async Task<IDbConnection> CreateAsync(
-        string      connectionString,
-        DbProvider  provider,
-        int?        timeoutSeconds = null)
-    {
-        if (string.IsNullOrWhiteSpace(connectionString))
-            throw new ArgumentException("Connection string must not be empty.", nameof(connectionString));
-
-        IDbConnection conn = provider switch
-        {
-            DbProvider.SqlServer => new SqlConnection(connectionString),
-            DbProvider.Oracle    => new OracleConnection(connectionString),
-            _                    => throw new NotSupportedException($"Provider '{provider}' is not supported.")
-        };
-
-        try
-        {
-            // OracleConnection.OpenAsync is available; SqlConnection also supports it.
-            if (conn is SqlConnection sql)
-                await sql.OpenAsync();
-            else if (conn is OracleConnection ora)
-                await ora.OpenAsync();
-            else
-                conn.Open();
-
-            return conn;
-        }
-        catch
-        {
-            conn.Dispose();
-            throw;
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Dynamic query executor
-// ─────────────────────────────────────────────────────────────────────────────
-
-public sealed class DynamicQueryExecutor
-{
-    // ── SELECT / multi-result ────────────────────────────────────────────────
-
-    /// <summary>
-    /// Executes a raw SELECT query and returns typed rows.
-    /// Maps each column dynamically when T = IDictionary&lt;string, object&gt;.
-    /// </summary>
-    public async Task<QueryResult<T>> QueryAsync<T>(QueryRequest request)
-    {
-        ValidateRequest(request);
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-
-        try
-        {
-            await using var conn = (System.IAsyncDisposable)
-                await DbConnectionFactory.CreateAsync(request.ConnectionString, request.Provider, request.TimeoutSeconds);
-
-            var rows = await ((IDbConnection)conn).QueryAsync<T>(
-                sql:            request.Sql,
-                param:          NormalizeParams(request.Parameters, request.Provider),
-                commandType:    request.CommandType,
-                commandTimeout: request.TimeoutSeconds
-            );
-
-            sw.Stop();
-            return new QueryResult<T>
-            {
-                Success = true,
-                Data    = rows,
-                Elapsed = sw.Elapsed
-            };
-        }
-        catch (Exception ex)
-        {
-            sw.Stop();
-            return Fail<T>(ex, sw.Elapsed);
-        }
-    }
-
-    /// <summary>
-    /// Returns rows as dynamic (ExpandoObject), column names preserved.
-    /// Useful when schema is not known at compile time.
-    /// </summary>
-    public async Task<QueryResult<dynamic>> QueryDynamicAsync(QueryRequest request)
-        => await QueryAsync<dynamic>(request);
-
-    // ── Single scalar ────────────────────────────────────────────────────────
-
-    public async Task<QueryResult<T>> QueryScalarAsync<T>(QueryRequest request)
-    {
-        ValidateRequest(request);
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-
-        try
-        {
-            await using var conn = (System.IAsyncDisposable)
-                await DbConnectionFactory.CreateAsync(request.ConnectionString, request.Provider, request.TimeoutSeconds);
-
-            var value = await ((IDbConnection)conn).ExecuteScalarAsync<T>(
-                sql:            request.Sql,
-                param:          NormalizeParams(request.Parameters, request.Provider),
-                commandType:    request.CommandType,
-                commandTimeout: request.TimeoutSeconds
-            );
-
-            sw.Stop();
-            return new QueryResult<T>
-            {
-                Success = true,
-                Data    = value is null ? [] : [value],
-                Elapsed = sw.Elapsed
-            };
-        }
-        catch (Exception ex)
-        {
-            sw.Stop();
-            return Fail<T>(ex, sw.Elapsed);
-        }
-    }
-
-    // ── INSERT / UPDATE / DELETE ─────────────────────────────────────────────
-
-    public async Task<QueryResult<int>> ExecuteAsync(QueryRequest request)
-    {
-        ValidateRequest(request);
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-
-        try
-        {
-            await using var conn = (System.IAsyncDisposable)
-                await DbConnectionFactory.CreateAsync(request.ConnectionString, request.Provider, request.TimeoutSeconds);
-
-            var affected = await ((IDbConnection)conn).ExecuteAsync(
-                sql:            request.Sql,
-                param:          NormalizeParams(request.Parameters, request.Provider),
-                commandType:    request.CommandType,
-                commandTimeout: request.TimeoutSeconds
-            );
-
-            sw.Stop();
-            return new QueryResult<int>
-            {
-                Success      = true,
-                RowsAffected = affected,
-                Elapsed      = sw.Elapsed
-            };
-        }
-        catch (Exception ex)
-        {
-            sw.Stop();
-            return Fail<int>(ex, sw.Elapsed);
-        }
-    }
-
-    // ── Oracle cursor / multi-result set ─────────────────────────────────────
-
-    /// <summary>
-    /// Executes an Oracle stored procedure that returns a SYS_REFCURSOR
-    /// bound to the named output parameter.
-    /// 
-    /// Example:
-    ///   var dp = new OracleDynamicParameters();
-    ///   dp.Add("p_ou_id",  10,   OracleMappingType.Int32,    ParameterDirection.Input);
-    ///   dp.Add("p_cursor", null, OracleMappingType.RefCursor, ParameterDirection.Output);
-    ///   var result = await executor.QueryOracleCursorAsync&lt;SalesDto&gt;(request, dp, "p_cursor");
-    /// </summary>
-    public async Task<QueryResult<T>> QueryOracleCursorAsync<T>(
-        QueryRequest            request,
-        OracleDynamicParameters oracleParams,
-        string                  cursorParamName)
-    {
-        ValidateRequest(request, requireOracle: true);
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-
-        try
-        {
-            await using var conn = (System.IAsyncDisposable)
-                await DbConnectionFactory.CreateAsync(request.ConnectionString, DbProvider.Oracle, request.TimeoutSeconds);
-
-            await ((IDbConnection)conn).ExecuteAsync(
-                sql:            request.Sql,
-                param:          oracleParams,
-                commandType:    CommandType.StoredProcedure,
-                commandTimeout: request.TimeoutSeconds
-            );
-
-            var rows = oracleParams.Get<IEnumerable<T>>(cursorParamName);
-
-            sw.Stop();
-            return new QueryResult<T>
-            {
-                Success = true,
-                Data    = rows,
-                Elapsed = sw.Elapsed
-            };
-        }
-        catch (Exception ex)
-        {
-            sw.Stop();
-            return Fail<T>(ex, sw.Elapsed);
-        }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Helpers
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private static void ValidateRequest(QueryRequest request, bool requireOracle = false)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        if (string.IsNullOrWhiteSpace(request.ConnectionString))
-            throw new ArgumentException("ConnectionString is required.", nameof(request));
-
-        if (string.IsNullOrWhiteSpace(request.Sql))
-            throw new ArgumentException("Sql must not be empty.", nameof(request));
-
-        if (requireOracle && request.Provider != DbProvider.Oracle)
-            throw new InvalidOperationException("This method requires DbProvider.Oracle.");
-    }
-
-    /// <summary>
-    /// Oracle uses :param notation; Dapper handles this transparently when
-    /// OracleConnection is used, BUT anonymous objects need no special handling.
-    /// This hook is reserved for future provider-specific normalization.
-    /// </summary>
-    private static object? NormalizeParams(object? parameters, DbProvider provider)
-        => parameters; // Dapper + OracleConnection resolves : prefix automatically.
-
-    private static QueryResult<T> Fail<T>(Exception ex, TimeSpan elapsed)
-    {
-        // Unwrap common Oracle/SQL exception messages for clean logging.
-        var message = ex is OracleException ora
-            ? $"ORA-{ora.Number}: {ora.Message}"
-            : ex.Message;
-
-        return new QueryResult<T>
-        {
-            Success      = false,
-            ErrorMessage = message,
-            ErrorType    = ex.GetType().Name,
-            Elapsed      = elapsed
-        };
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// OracleDynamicParameters  (Dapper doesn't ship Oracle-specific params)
+// Connection factory abstraction
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// <summary>
-/// Lightweight wrapper that lets you add Oracle-typed parameters
-/// (including REF CURSOR) to a Dapper call.
+/// Creates and opens <see cref="IDbConnection"/> instances.
+/// Register one implementation per database vendor (SQL Server, PostgreSQL, SQLite …).
 /// </summary>
-public sealed class OracleDynamicParameters : SqlMapper.IDynamicParameters
+public interface IDbConnectionFactory
 {
-    private readonly List<OracleParamDef> _params = [];
+    /// <summary>
+    /// Creates and opens a connection using the factory's default connection string.
+    /// </summary>
+    Task<IDbConnection> CreateConnectionAsync(CancellationToken cancellationToken = default);
 
-    public void Add(
-        string              name,
-        object?             value,
-        OracleMappingType   dbType,
-        ParameterDirection  direction,
-        int?                size = null)
-    {
-        _params.Add(new OracleParamDef(name, value, dbType, direction, size));
-    }
-
-    public T Get<T>(string name)
-    {
-        var p = _params.Find(x => x.Name == name)
-                ?? throw new KeyNotFoundException($"Parameter '{name}' not found.");
-        return (T)(p.OracleParam!.Value ?? default(T)!);
-    }
-
-    void SqlMapper.IDynamicParameters.AddParameters(IDbCommand command, SqlMapper.Identity identity)
-    {
-        foreach (var def in _params)
-        {
-            var p = ((OracleCommand)command).CreateParameter();
-            p.ParameterName = def.Name;
-            p.OracleDbType  = (OracleDbType)(int)def.DbType;   // enum value mapping
-            p.Direction     = def.Direction;
-            if (def.Value is not null)  p.Value = def.Value;
-            if (def.Size  is not null)  p.Size  = def.Size.Value;
-            ((OracleCommand)command).Parameters.Add(p);
-            def.OracleParam = p;
-        }
-    }
-
-    private sealed class OracleParamDef(
-        string name, object? value, OracleMappingType dbType,
-        ParameterDirection direction, int? size)
-    {
-        public string             Name        { get; } = name;
-        public object?            Value       { get; } = value;
-        public OracleMappingType  DbType      { get; } = dbType;
-        public ParameterDirection Direction   { get; } = direction;
-        public int?               Size        { get; } = size;
-        public OracleParameter?   OracleParam { get; set; }
-    }
+    /// <summary>
+    /// Creates and opens a connection using an explicit <paramref name="connectionString"/>,
+    /// enabling multi-database execution from a single factory instance.
+    /// </summary>
+    Task<IDbConnection> CreateConnectionAsync(string connectionString,
+        CancellationToken cancellationToken = default);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OracleMappingType  (mirror of Oracle.ManagedDataAccess OracleDbType)
+// Executor interface
 // ─────────────────────────────────────────────────────────────────────────────
 
-public enum OracleMappingType
+/// <summary>
+/// Executes raw SQL statements at runtime via Dapper with full async, transaction,
+/// cancellation-token, and multi-database support.
+/// </summary>
+public interface IDynamicQueryExecutor
 {
-    BFile       = 101,
-    Blob        = 102,
-    Byte        = 103,
-    Char        = 104,
-    Clob        = 105,
-    Date        = 106,
-    Decimal     = 107,
-    Double      = 108,
-    Long        = 109,
-    LongRaw     = 110,
-    Int16       = 111,
-    Int32       = 112,
-    Int64       = 113,
-    IntervalDS  = 114,
-    IntervalYM  = 115,
-    NClob       = 116,
-    NChar       = 117,
-    NVarchar2   = 119,
-    Raw         = 120,
-    RefCursor   = 121,
-    Single      = 122,
-    TimeStamp   = 123,
-    TimeStampLTZ= 124,
-    TimeStampTZ = 125,
-    Varchar2    = 126,
-    XmlType     = 127,
-    Array       = 128,
-    Object      = 129,
-    Ref         = 130,
-    BinaryFloat = 132,
-    BinaryDouble= 133
+    /// <summary>
+    /// Executes a SELECT query and returns a (possibly empty) sequence of <typeparamref name="T"/>.
+    /// </summary>
+    /// <typeparam name="T">The type each row is mapped to.</typeparam>
+    /// <param name="sql">Raw SQL SELECT statement.</param>
+    /// <param name="parameters">
+    ///   Anonymous object (<c>new { Id = 1 }</c>) or a <see cref="DynamicParameters"/> instance.
+    /// </param>
+    /// <param name="transaction">Optional ambient transaction.</param>
+    /// <param name="connectionString">
+    ///   Override the factory's default connection string for multi-database scenarios.
+    /// </param>
+    /// <param name="cancellationToken">Propagates cancellation to the underlying connection.</param>
+    Task<IEnumerable<T>> QueryAsync<T>(
+        string sql,
+        object? parameters = null,
+        IDbTransaction? transaction = null,
+        string? connectionString = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Executes a SELECT query and returns the first row, or <c>default</c> when no row matches.
+    /// Throws <see cref="InvalidOperationException"/> if more than one row is returned.
+    /// </summary>
+    /// <typeparam name="T">The type the row is mapped to.</typeparam>
+    /// <param name="sql">Raw SQL SELECT statement.</param>
+    /// <param name="parameters">Anonymous object or <see cref="DynamicParameters"/>.</param>
+    /// <param name="transaction">Optional ambient transaction.</param>
+    /// <param name="connectionString">Override connection string.</param>
+    /// <param name="cancellationToken">Propagates cancellation to the underlying connection.</param>
+    Task<T?> QuerySingleOrDefaultAsync<T>(
+        string sql,
+        object? parameters = null,
+        IDbTransaction? transaction = null,
+        string? connectionString = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Executes a non-SELECT statement (INSERT / UPDATE / DELETE / DDL) and returns the
+    /// number of rows affected.
+    /// </summary>
+    /// <param name="sql">Raw SQL non-SELECT statement.</param>
+    /// <param name="parameters">Anonymous object or <see cref="DynamicParameters"/>.</param>
+    /// <param name="transaction">Optional ambient transaction.</param>
+    /// <param name="connectionString">Override connection string.</param>
+    /// <param name="cancellationToken">Propagates cancellation to the underlying connection.</param>
+    Task<int> ExecuteAsync(
+        string sql,
+        object? parameters = null,
+        IDbTransaction? transaction = null,
+        string? connectionString = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Executes two queries in a single round-trip: one for a data page and one for the total
+    /// count, returning both results together.
+    /// </summary>
+    /// <typeparam name="T">The type each data row is mapped to.</typeparam>
+    /// <param name="dataSql">Raw SQL that returns the current page of rows.</param>
+    /// <param name="countSql">Raw SQL that returns a single <see cref="int"/> total count.</param>
+    /// <param name="parameters">Shared parameters applied to both statements.</param>
+    /// <param name="transaction">Optional ambient transaction.</param>
+    /// <param name="connectionString">Override connection string.</param>
+    /// <param name="cancellationToken">Propagates cancellation to the underlying connection.</param>
+    Task<(IEnumerable<T> Data, int TotalCount)> QueryPagedAsync<T>(
+        string dataSql,
+        string countSql,
+        object? parameters = null,
+        IDbTransaction? transaction = null,
+        string? connectionString = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Runs <paramref name="work"/> inside a new database transaction, automatically committing
+    /// on success and rolling back on any exception.
+    /// </summary>
+    /// <param name="work">Async delegate that receives the open transaction.</param>
+    /// <param name="isolationLevel">Transaction isolation level (defaults to <see cref="IsolationLevel.ReadCommitted"/>).</param>
+    /// <param name="connectionString">Override connection string.</param>
+    /// <param name="cancellationToken">Propagates cancellation to the underlying connection.</param>
+    Task ExecuteInTransactionAsync(
+        Func<IDbTransaction, Task> work,
+        IsolationLevel isolationLevel = IsolationLevel.ReadCommitted,
+        string? connectionString = null,
+        CancellationToken cancellationToken = default);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// USAGE EXAMPLES  (remove in production)
+// Implementation
 // ─────────────────────────────────────────────────────────────────────────────
 
-public static class UsageExamples
+/// <summary>
+/// Production-ready, thread-safe implementation of <see cref="IDynamicQueryExecutor"/>.
+/// Each public method opens a short-lived connection (or reuses a transactional one),
+/// delegates to Dapper, and logs every call with its elapsed time.
+/// </summary>
+public sealed class DynamicQueryExecutor : IDynamicQueryExecutor
 {
-    private static readonly DynamicQueryExecutor Executor = new();
+    private readonly IDbConnectionFactory _factory;
+    private readonly ILogger<DynamicQueryExecutor> _logger;
 
-    // ── 1. SQL Server – raw SELECT ───────────────────────────────────────────
-    public static async Task SqlServerSelectExample()
+    /// <summary>
+    /// Initializes a new instance of <see cref="DynamicQueryExecutor"/>.
+    /// </summary>
+    /// <param name="factory">Factory used to resolve database connections.</param>
+    /// <param name="logger">Logger for query diagnostics.</param>
+    public DynamicQueryExecutor(IDbConnectionFactory factory,
+                                ILogger<DynamicQueryExecutor> logger)
     {
-        var result = await Executor.QueryDynamicAsync(new QueryRequest
-        {
-            ConnectionString = "Server=.;Database=JanaticsDB;Integrated Security=True;",
-            Provider         = DbProvider.SqlServer,
-            Sql              = "SELECT TOP 10 * FROM SalesOrders WHERE OrgId = @orgId",
-            Parameters       = new { orgId = 5 },
-            TimeoutSeconds   = 30
-        });
-
-        if (!result.Success)
-        {
-            Console.Error.WriteLine($"[{result.ErrorType}] {result.ErrorMessage}");
-            return;
-        }
-
-        foreach (var row in result.Data!)
-            Console.WriteLine(row);
-
-        Console.WriteLine($"Elapsed: {result.Elapsed.TotalMilliseconds:F1} ms");
+        _factory = factory ?? throw new ArgumentNullException(nameof(factory));
+        _logger  = logger  ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    // ── 2. Oracle – raw SELECT ───────────────────────────────────────────────
-    public static async Task OracleSelectExample()
+    /// <inheritdoc/>
+    public async Task<IEnumerable<T>> QueryAsync<T>(
+        string sql,
+        object? parameters = null,
+        IDbTransaction? transaction = null,
+        string? connectionString = null,
+        CancellationToken cancellationToken = default)
     {
-        var result = await Executor.QueryAsync<SalesRow>(new QueryRequest
+        ArgumentException.ThrowIfNullOrWhiteSpace(sql);
+
+        _logger.LogDebug("QueryAsync<{Type}> START  SQL: {Sql}", typeof(T).Name, sql);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        try
         {
-            ConnectionString = "User Id=apps;Password=secret;Data Source=ERPPROD;",
-            Provider         = DbProvider.Oracle,
-            Sql              = @"SELECT ou_name, net_sales, target
-                                 FROM   v_ou_sales_perf
-                                 WHERE  fiscal_year = :p_year",
-            Parameters       = new { p_year = 2024 },
-            TimeoutSeconds   = 60
-        });
-
-        if (!result.Success)
-        {
-            Console.Error.WriteLine($"Oracle error – {result.ErrorMessage}");
-            return;
-        }
-
-        foreach (var row in result.Data!)
-            Console.WriteLine($"{row.OuName} | {row.NetSales} | {row.Target}");
-    }
-
-    // ── 3. Oracle – stored proc with SYS_REFCURSOR ──────────────────────────
-    public static async Task OracleCursorExample()
-    {
-        var dp = new OracleDynamicParameters();
-        dp.Add("p_ou_id",  10,   OracleMappingType.Int32,     ParameterDirection.Input);
-        dp.Add("p_year",   2024, OracleMappingType.Int32,     ParameterDirection.Input);
-        dp.Add("p_cursor", null, OracleMappingType.RefCursor,  ParameterDirection.Output);
-
-        var result = await Executor.QueryOracleCursorAsync<SalesRow>(
-            new QueryRequest
+            // Reuse the transactional connection if one is supplied.
+            if (transaction is not null)
             {
-                ConnectionString = "User Id=apps;Password=secret;Data Source=ERPPROD;",
-                Provider         = DbProvider.Oracle,
-                Sql              = "JAN_GET_OU_SALES_PERFORMANCE",
-                TimeoutSeconds   = 90
-            },
-            dp,
-            cursorParamName: "p_cursor"
-        );
+                var cmd = BuildCommand(sql, parameters, transaction, cancellationToken);
+                var result = await transaction.Connection!
+                    .QueryAsync<T>(cmd).ConfigureAwait(false);
 
-        if (!result.Success)
-        {
-            Console.Error.WriteLine(result.ErrorMessage);
-            return;
+                LogSuccess(sw, typeof(T).Name, nameof(QueryAsync));
+                return result;
+            }
+
+            await using var conn = await OpenAsync(connectionString, cancellationToken)
+                .ConfigureAwait(false);
+
+            var command = BuildCommand(sql, parameters, null, cancellationToken);
+            var rows = await conn.QueryAsync<T>(command).ConfigureAwait(false);
+
+            LogSuccess(sw, typeof(T).Name, nameof(QueryAsync));
+            return rows;
         }
-
-        foreach (var row in result.Data!)
-            Console.WriteLine($"{row.OuName}: {row.NetSales:N0}");
-    }
-
-    // ── 4. SQL Server – execute (INSERT/UPDATE/DELETE) ───────────────────────
-    public static async Task ExecuteExample()
-    {
-        var result = await Executor.ExecuteAsync(new QueryRequest
+        catch (Exception ex)
         {
-            ConnectionString = "Server=.;Database=JanaticsDB;Integrated Security=True;",
-            Provider         = DbProvider.SqlServer,
-            Sql              = "UPDATE FileRequests SET Status = @status WHERE Id = @id",
-            Parameters       = new { status = "Approved", id = 42 }
-        });
+            _logger.LogError(ex, "QueryAsync<{Type}> FAILED  SQL: {Sql}", typeof(T).Name, sql);
+            throw;
+        }
+    }
 
-        Console.WriteLine(result.Success
-            ? $"Updated {result.RowsAffected} row(s) in {result.Elapsed.TotalMilliseconds:F1} ms"
-            : $"Failed: {result.ErrorMessage}");
+    /// <inheritdoc/>
+    public async Task<T?> QuerySingleOrDefaultAsync<T>(
+        string sql,
+        object? parameters = null,
+        IDbTransaction? transaction = null,
+        string? connectionString = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sql);
+
+        _logger.LogDebug("QuerySingleOrDefaultAsync<{Type}> START  SQL: {Sql}", typeof(T).Name, sql);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        try
+        {
+            if (transaction is not null)
+            {
+                var cmd = BuildCommand(sql, parameters, transaction, cancellationToken);
+                var result = await transaction.Connection!
+                    .QuerySingleOrDefaultAsync<T>(cmd).ConfigureAwait(false);
+
+                LogSuccess(sw, typeof(T).Name, nameof(QuerySingleOrDefaultAsync));
+                return result;
+            }
+
+            await using var conn = await OpenAsync(connectionString, cancellationToken)
+                .ConfigureAwait(false);
+
+            var command = BuildCommand(sql, parameters, null, cancellationToken);
+            var row = await conn.QuerySingleOrDefaultAsync<T>(command).ConfigureAwait(false);
+
+            LogSuccess(sw, typeof(T).Name, nameof(QuerySingleOrDefaultAsync));
+            return row;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "QuerySingleOrDefaultAsync<{Type}> FAILED  SQL: {Sql}",
+                typeof(T).Name, sql);
+            throw;
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task<int> ExecuteAsync(
+        string sql,
+        object? parameters = null,
+        IDbTransaction? transaction = null,
+        string? connectionString = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sql);
+
+        _logger.LogDebug("ExecuteAsync START  SQL: {Sql}", sql);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        try
+        {
+            if (transaction is not null)
+            {
+                var cmd = BuildCommand(sql, parameters, transaction, cancellationToken);
+                var result = await transaction.Connection!
+                    .ExecuteAsync(cmd).ConfigureAwait(false);
+
+                LogSuccess(sw, null, nameof(ExecuteAsync), result);
+                return result;
+            }
+
+            await using var conn = await OpenAsync(connectionString, cancellationToken)
+                .ConfigureAwait(false);
+
+            var command = BuildCommand(sql, parameters, null, cancellationToken);
+            var affected = await conn.ExecuteAsync(command).ConfigureAwait(false);
+
+            LogSuccess(sw, null, nameof(ExecuteAsync), affected);
+            return affected;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "ExecuteAsync FAILED  SQL: {Sql}", sql);
+            throw;
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task<(IEnumerable<T> Data, int TotalCount)> QueryPagedAsync<T>(
+        string dataSql,
+        string countSql,
+        object? parameters = null,
+        IDbTransaction? transaction = null,
+        string? connectionString = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dataSql);
+        ArgumentException.ThrowIfNullOrWhiteSpace(countSql);
+
+        _logger.LogDebug("QueryPagedAsync<{Type}> START  DataSQL: {DataSql}  CountSQL: {CountSql}",
+            typeof(T).Name, dataSql, countSql);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        try
+        {
+            // Execute both queries on the same open connection to minimise round-trips.
+            IDbConnection conn;
+            bool owned = transaction is null;
+
+            if (owned)
+                conn = await OpenAsync(connectionString, cancellationToken).ConfigureAwait(false);
+            else
+                conn = transaction!.Connection!;
+
+            try
+            {
+                var dataCmd  = BuildCommand(dataSql,  parameters, transaction, cancellationToken);
+                var countCmd = BuildCommand(countSql, parameters, transaction, cancellationToken);
+
+                var dataTask  = conn.QueryAsync<T>(dataCmd);
+                var countTask = conn.QuerySingleOrDefaultAsync<int>(countCmd);
+
+                await Task.WhenAll(dataTask, countTask).ConfigureAwait(false);
+
+                var data  = await dataTask;
+                var total = await countTask;
+
+                _logger.LogInformation(
+                    "QueryPagedAsync<{Type}> OK  rows={Rows}  total={Total}  {Elapsed}ms",
+                    typeof(T).Name, data.Count(), total, sw.ElapsedMilliseconds);
+
+                return (data, total);
+            }
+            finally
+            {
+                if (owned) (conn as IAsyncDisposable)?.DisposeAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "QueryPagedAsync<{Type}> FAILED  DataSQL: {Sql}",
+                typeof(T).Name, dataSql);
+            throw;
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task ExecuteInTransactionAsync(
+        Func<IDbTransaction, Task> work,
+        IsolationLevel isolationLevel = IsolationLevel.ReadCommitted,
+        string? connectionString = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+
+        _logger.LogDebug("ExecuteInTransactionAsync START  IsolationLevel: {Level}", isolationLevel);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        await using var conn = await OpenAsync(connectionString, cancellationToken)
+            .ConfigureAwait(false);
+
+        using var tx = conn.BeginTransaction(isolationLevel);
+        try
+        {
+            await work(tx).ConfigureAwait(false);
+            tx.Commit();
+
+            _logger.LogInformation("ExecuteInTransactionAsync COMMITTED  {Elapsed}ms",
+                sw.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            tx.Rollback();
+            _logger.LogError(ex, "ExecuteInTransactionAsync ROLLED BACK  {Elapsed}ms",
+                sw.ElapsedMilliseconds);
+            throw;
+        }
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Opens a connection via the factory, using the override string when provided.
+    /// Returns an <see cref="IAsyncDisposable"/> wrapper so callers can <c>await using</c> it.
+    /// </summary>
+    private async Task<AsyncConnectionWrapper> OpenAsync(
+        string? connectionString,
+        CancellationToken cancellationToken)
+    {
+        var conn = connectionString is { Length: > 0 }
+            ? await _factory.CreateConnectionAsync(connectionString, cancellationToken).ConfigureAwait(false)
+            : await _factory.CreateConnectionAsync(cancellationToken).ConfigureAwait(false);
+
+        return new AsyncConnectionWrapper(conn);
+    }
+
+    /// <summary>
+    /// Builds a Dapper <see cref="CommandDefinition"/> that carries the SQL, parameters,
+    /// transaction, and cancellation token.
+    /// </summary>
+    private static CommandDefinition BuildCommand(
+        string sql,
+        object? parameters,
+        IDbTransaction? transaction,
+        CancellationToken cancellationToken)
+        => new(sql,
+               parameters: parameters,
+               transaction: transaction,
+               cancellationToken: cancellationToken);
+
+    private void LogSuccess(System.Diagnostics.Stopwatch sw, string? typeName,
+                            string method, int? rows = null)
+    {
+        if (rows.HasValue)
+            _logger.LogInformation("{Method} OK  rowsAffected={Rows}  {Elapsed}ms",
+                method, rows.Value, sw.ElapsedMilliseconds);
+        else
+            _logger.LogInformation("{Method}<{Type}> OK  {Elapsed}ms",
+                method, typeName, sw.ElapsedMilliseconds);
+    }
+
+    // ── Nested helper: async-disposable connection wrapper ────────────────────
+
+    /// <summary>
+    /// Thin wrapper that lets callers dispose an <see cref="IDbConnection"/> with
+    /// <c>await using</c>, regardless of whether the connection implements
+    /// <see cref="IAsyncDisposable"/> itself.
+    /// </summary>
+    private sealed class AsyncConnectionWrapper : IAsyncDisposable
+    {
+        private readonly IDbConnection _conn;
+        public AsyncConnectionWrapper(IDbConnection conn) => _conn = conn;
+
+        // Implicit cast so callers can pass the wrapper directly to Dapper extension methods.
+        public static implicit operator IDbConnection(AsyncConnectionWrapper w) => w._conn;
+
+        public ValueTask DisposeAsync()
+        {
+            _conn.Dispose();
+            return ValueTask.CompletedTask;
+        }
     }
 }
 
-public sealed class SalesRow
+// ─────────────────────────────────────────────────────────────────────────────
+// Reference implementation: SQL Server connection factory
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// <summary>
+/// <see cref="IDbConnectionFactory"/> implementation for SQL Server using
+/// <c>Microsoft.Data.SqlClient</c>. Swap the provider for PostgreSQL, SQLite, etc.
+/// </summary>
+/// <example>
+/// <code>
+/// services.AddSingleton&lt;IDbConnectionFactory&gt;(
+///     new SqlServerConnectionFactory("Server=.;Database=Demo;Integrated Security=true;"));
+/// </code>
+/// </example>
+public sealed class SqlServerConnectionFactory : IDbConnectionFactory
 {
-    public string? OuName   { get; init; }
-    public decimal NetSales  { get; init; }
-    public decimal Target    { get; init; }
+    private readonly string _defaultConnectionString;
+
+    /// <param name="defaultConnectionString">Connection string used when no override is supplied.</param>
+    public SqlServerConnectionFactory(string defaultConnectionString)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(defaultConnectionString);
+        _defaultConnectionString = defaultConnectionString;
+    }
+
+    /// <inheritdoc/>
+    public Task<IDbConnection> CreateConnectionAsync(CancellationToken cancellationToken = default)
+        => CreateConnectionAsync(_defaultConnectionString, cancellationToken);
+
+    /// <inheritdoc/>
+    public async Task<IDbConnection> CreateConnectionAsync(string connectionString,
+        CancellationToken cancellationToken = default)
+    {
+        // Microsoft.Data.SqlClient.SqlConnection implements IDbConnection.
+        // Replace with NpgsqlConnection, SqliteConnection, etc. as needed.
+        var conn = new Microsoft.Data.SqlClient.SqlConnection(connectionString);
+        await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return conn;
+    }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DI registration extension
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Extension methods for registering Dynamic Dapper services in an
+/// <c>IServiceCollection</c>.
+/// </summary>
+public static class DynamicDapperServiceExtensions
+{
+    /// <summary>
+    /// Registers <see cref="DynamicQueryExecutor"/> and a SQL Server
+    /// <see cref="IDbConnectionFactory"/> as singletons.
+    /// </summary>
+    /// <param name="services">The DI service collection.</param>
+    /// <param name="connectionString">Default SQL Server connection string.</param>
+    public static IServiceCollection AddDynamicDapper(
+        this Microsoft.Extensions.DependencyInjection.IServiceCollection services,
+        string connectionString)
+    {
+        services.AddSingleton<IDbConnectionFactory>(
+            new SqlServerConnectionFactory(connectionString));
+
+        services.AddSingleton<IDynamicQueryExecutor, DynamicQueryExecutor>();
+        return services;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Usage examples (compile with: dotnet run or as a top-level program)
+// ─────────────────────────────────────────────────────────────────────────────
+/*
+
+/// SETUP ─────────────────────────────────────────────────────────────────────
+
+// Program.cs / Startup.cs
+using DynamicDapper;
+
+builder.Services.AddDynamicDapper("Server=.;Database=Demo;Integrated Security=true;");
+
+
+/// EXAMPLE 1 — SELECT with an anonymous-object parameter ─────────────────────
+
+public record Product(int Id, string Name, decimal Price);
+
+var products = await executor.QueryAsync<Product>(
+    "SELECT Id, Name, Price FROM Products WHERE CategoryId = @CategoryId",
+    new { CategoryId = 5 });
+
+
+/// EXAMPLE 2 — QuerySingleOrDefaultAsync ─────────────────────────────────────
+
+var product = await executor.QuerySingleOrDefaultAsync<Product>(
+    "SELECT Id, Name, Price FROM Products WHERE Id = @Id",
+    new { Id = 42 });
+
+if (product is null) Console.WriteLine("Not found");
+
+
+/// EXAMPLE 3 — ExecuteAsync (INSERT) ─────────────────────────────────────────
+
+int rows = await executor.ExecuteAsync(
+    "INSERT INTO Products (Name, Price, CategoryId) VALUES (@Name, @Price, @CategoryId)",
+    new { Name = "Widget", Price = 9.99m, CategoryId = 5 });
+
+Console.WriteLine($"{rows} row(s) inserted.");
+
+
+/// EXAMPLE 4 — DynamicParameters ─────────────────────────────────────────────
+
+var dp = new DynamicParameters();
+dp.Add("@Name",    "Gadget",  DbType.String);
+dp.Add("@MinPrice", 5.00m,   DbType.Decimal);
+
+var results = await executor.QueryAsync<Product>(
+    "SELECT Id, Name, Price FROM Products WHERE Name LIKE @Name AND Price >= @MinPrice",
+    dp);
+
+
+/// EXAMPLE 5 — QueryPagedAsync ────────────────────────────────────────────────
+
+var paged = await executor.QueryPagedAsync<Product>(
+    dataSql:  "SELECT Id, Name, Price FROM Products ORDER BY Id OFFSET @Skip ROWS FETCH NEXT @Take ROWS ONLY",
+    countSql: "SELECT COUNT(*) FROM Products",
+    parameters: new { Skip = 0, Take = 10 });
+
+Console.WriteLine($"Page: {paged.Data.Count()} rows  /  Total: {paged.TotalCount}");
+
+
+/// EXAMPLE 6 — Explicit transaction ──────────────────────────────────────────
+
+await executor.ExecuteInTransactionAsync(async tx =>
+{
+    await executor.ExecuteAsync(
+        "UPDATE Inventory SET Stock = Stock - @Qty WHERE ProductId = @ProductId",
+        new { Qty = 2, ProductId = 42 },
+        transaction: tx);
+
+    await executor.ExecuteAsync(
+        "INSERT INTO Orders (ProductId, Qty, CreatedAt) VALUES (@ProductId, @Qty, @Now)",
+        new { ProductId = 42, Qty = 2, Now = DateTime.UtcNow },
+        transaction: tx);
+    // Commits automatically on return; rolls back on exception.
+});
+
+
+/// EXAMPLE 7 — Multi-database execution ───────────────────────────────────────
+
+var legacyProducts = await executor.QueryAsync<Product>(
+    "SELECT Id, Name, Price FROM LegacyProducts",
+    connectionString: "Server=legacy-db;Database=Legacy;Integrated Security=true;");
+
+
+/// EXAMPLE 8 — Cancellation token ─────────────────────────────────────────────
+
+using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+var data = await executor.QueryAsync<Product>(
+    "SELECT Id, Name, Price FROM Products",
+    cancellationToken: cts.Token);
+
+*/
