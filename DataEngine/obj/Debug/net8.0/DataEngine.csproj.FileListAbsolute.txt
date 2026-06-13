@@ -1,0 +1,12 @@
+/Users/sivalingam/Documents/files/DataEngine_Refactored/DataEngine/obj/Debug/net8.0/DataEngine.csproj.AssemblyReference.cache
+/Users/sivalingam/Documents/files/DataEngine_Refactored/DataEngine/obj/Debug/net8.0/DataEngine.GeneratedMSBuildEditorConfig.editorconfig
+/Users/sivalingam/Documents/files/DataEngine_Refactored/DataEngine/obj/Debug/net8.0/DataEngine.AssemblyInfoInputs.cache
+/Users/sivalingam/Documents/files/DataEngine_Refactored/DataEngine/obj/Debug/net8.0/DataEngine.AssemblyInfo.cs
+/Users/sivalingam/Documents/files/DataEngine_Refactored/DataEngine/obj/Debug/net8.0/DataEngine.csproj.CoreCompileInputs.cache
+/Users/sivalingam/Documents/files/DataEngine_Refactored/DataEngine/bin/Debug/net8.0/DataEngine.deps.json
+/Users/sivalingam/Documents/files/DataEngine_Refactored/DataEngine/bin/Debug/net8.0/DataEngine.dll
+/Users/sivalingam/Documents/files/DataEngine_Refactored/DataEngine/bin/Debug/net8.0/DataEngine.pdb
+/Users/sivalingam/Documents/files/DataEngine_Refactored/DataEngine/obj/Debug/net8.0/DataEngine.dll
+/Users/sivalingam/Documents/files/DataEngine_Refactored/DataEngine/obj/Debug/net8.0/refint/DataEngine.dll
+/Users/sivalingam/Documents/files/DataEngine_Refactored/DataEngine/obj/Debug/net8.0/DataEngine.pdb
+/Users/sivalingam/Documents/files/DataEngine_Refactored/DataEngine/obj/Debug/net8.0/ref/DataEngine.dll
