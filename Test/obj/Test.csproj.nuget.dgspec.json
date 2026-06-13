@@ -1,25 +1,31 @@
 {
   "format": 1,
   "restore": {
-    "/Users/sivalingam/Documents/GitHub/DataEngine_Refactored/Test/Test.csproj": {}
+    "D:\\My Instance\\DataEngine_Refactored\\Test\\Test.csproj": {}
   },
   "projects": {
-    "/Users/sivalingam/Documents/GitHub/DataEngine_Refactored/DataEngine/DataEngine.csproj": {
+    "D:\\My Instance\\DataEngine_Refactored\\DataEngine\\DataEngine.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "/Users/sivalingam/Documents/GitHub/DataEngine_Refactored/DataEngine/DataEngine.csproj",
+        "projectUniqueName": "D:\\My Instance\\DataEngine_Refactored\\DataEngine\\DataEngine.csproj",
         "projectName": "DataEngine",
-        "projectPath": "/Users/sivalingam/Documents/GitHub/DataEngine_Refactored/DataEngine/DataEngine.csproj",
-        "packagesPath": "/Users/sivalingam/.nuget/packages/",
-        "outputPath": "/Users/sivalingam/Documents/GitHub/DataEngine_Refactored/DataEngine/obj/",
+        "projectPath": "D:\\My Instance\\DataEngine_Refactored\\DataEngine\\DataEngine.csproj",
+        "packagesPath": "C:\\Users\\1409\\.nuget\\packages\\",
+        "outputPath": "D:\\My Instance\\DataEngine_Refactored\\DataEngine\\obj\\",
         "projectStyle": "PackageReference",
+        "fallbackFolders": [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
+        ],
         "configFilePaths": [
-          "/Users/sivalingam/.nuget/NuGet/NuGet.Config"
+          "C:\\Users\\1409\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
         ],
         "originalTargetFrameworks": [
           "net8.0"
         ],
         "sources": {
+          "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
           "https://api.nuget.org/v3/index.json": {}
         },
         "frameworks": {
@@ -92,6 +98,10 @@
             {
               "name": "Microsoft.NETCore.App.Ref",
               "version": "[8.0.26, 8.0.26]"
+            },
+            {
+              "name": "Microsoft.WindowsDesktop.App.Ref",
+              "version": "[8.0.26, 8.0.26]"
             }
           ],
           "frameworkReferences": {
@@ -99,34 +109,40 @@
               "privateAssets": "all"
             }
           },
-          "runtimeIdentifierGraphPath": "/usr/local/share/dotnet/sdk/10.0.203/PortableRuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.202/PortableRuntimeIdentifierGraph.json"
         }
       }
     },
-    "/Users/sivalingam/Documents/GitHub/DataEngine_Refactored/Test/Test.csproj": {
+    "D:\\My Instance\\DataEngine_Refactored\\Test\\Test.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "/Users/sivalingam/Documents/GitHub/DataEngine_Refactored/Test/Test.csproj",
+        "projectUniqueName": "D:\\My Instance\\DataEngine_Refactored\\Test\\Test.csproj",
         "projectName": "Test",
-        "projectPath": "/Users/sivalingam/Documents/GitHub/DataEngine_Refactored/Test/Test.csproj",
-        "packagesPath": "/Users/sivalingam/.nuget/packages/",
-        "outputPath": "/Users/sivalingam/Documents/GitHub/DataEngine_Refactored/Test/obj/",
+        "projectPath": "D:\\My Instance\\DataEngine_Refactored\\Test\\Test.csproj",
+        "packagesPath": "C:\\Users\\1409\\.nuget\\packages\\",
+        "outputPath": "D:\\My Instance\\DataEngine_Refactored\\Test\\obj\\",
         "projectStyle": "PackageReference",
+        "fallbackFolders": [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
+        ],
         "configFilePaths": [
-          "/Users/sivalingam/.nuget/NuGet/NuGet.Config"
+          "C:\\Users\\1409\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
         ],
         "originalTargetFrameworks": [
           "net10.0"
         ],
         "sources": {
+          "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
           "https://api.nuget.org/v3/index.json": {}
         },
         "frameworks": {
           "net10.0": {
             "targetAlias": "net10.0",
             "projectReferences": {
-              "/Users/sivalingam/Documents/GitHub/DataEngine_Refactored/DataEngine/DataEngine.csproj": {
-                "projectPath": "/Users/sivalingam/Documents/GitHub/DataEngine_Refactored/DataEngine/DataEngine.csproj"
+              "D:\\My Instance\\DataEngine_Refactored\\DataEngine\\DataEngine.csproj": {
+                "projectPath": "D:\\My Instance\\DataEngine_Refactored\\DataEngine\\DataEngine.csproj"
               }
             }
           }
@@ -168,7 +184,7 @@
               "privateAssets": "all"
             }
           },
-          "runtimeIdentifierGraphPath": "/usr/local/share/dotnet/sdk/10.0.203/PortableRuntimeIdentifierGraph.json",
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.202/PortableRuntimeIdentifierGraph.json",
           "packagesToPrune": {
             "Microsoft.CSharp": "(,4.7.32767]",
             "Microsoft.VisualBasic": "(,10.4.32767]",

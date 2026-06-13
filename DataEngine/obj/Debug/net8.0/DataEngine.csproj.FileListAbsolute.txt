@@ -10,3 +10,16 @@
 /Users/sivalingam/Documents/files/DataEngine_Refactored/DataEngine/obj/Debug/net8.0/refint/DataEngine.dll
 /Users/sivalingam/Documents/files/DataEngine_Refactored/DataEngine/obj/Debug/net8.0/DataEngine.pdb
 /Users/sivalingam/Documents/files/DataEngine_Refactored/DataEngine/obj/Debug/net8.0/ref/DataEngine.dll
+D:\My Instance\DataEngine_Refactored\DataEngine\bin\Debug\net8.0\DataEngine.deps.json
+D:\My Instance\DataEngine_Refactored\DataEngine\bin\Debug\net8.0\DataEngine.dll
+D:\My Instance\DataEngine_Refactored\DataEngine\bin\Debug\net8.0\DataEngine.pdb
+D:\My Instance\DataEngine_Refactored\DataEngine\obj\Debug\net8.0\DataEngine.csproj.AssemblyReference.cache
+D:\My Instance\DataEngine_Refactored\DataEngine\obj\Debug\net8.0\DataEngine.GeneratedMSBuildEditorConfig.editorconfig
+D:\My Instance\DataEngine_Refactored\DataEngine\obj\Debug\net8.0\DataEngine.AssemblyInfoInputs.cache
+D:\My Instance\DataEngine_Refactored\DataEngine\obj\Debug\net8.0\DataEngine.AssemblyInfo.cs
+D:\My Instance\DataEngine_Refactored\DataEngine\obj\Debug\net8.0\DataEngine.csproj.CoreCompileInputs.cache
+D:\My Instance\DataEngine_Refactored\DataEngine\obj\Debug\net8.0\DataEngine.sourcelink.json
+D:\My Instance\DataEngine_Refactored\DataEngine\obj\Debug\net8.0\DataEngine.dll
+D:\My Instance\DataEngine_Refactored\DataEngine\obj\Debug\net8.0\refint\DataEngine.dll
+D:\My Instance\DataEngine_Refactored\DataEngine\obj\Debug\net8.0\DataEngine.pdb
+D:\My Instance\DataEngine_Refactored\DataEngine\obj\Debug\net8.0\ref\DataEngine.dll
